@@ -16,7 +16,7 @@ export launch, manage
 export SlurmManager
 
 # Bring some other names into scope, just for convenience:
-using Distributed: ClusterManager, WorkerConfig, cluster_cookie
+using Distributed: ClusterManager
 
 include("slurmmanager.jl")
 

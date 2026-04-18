@@ -121,9 +121,11 @@ function _new_environment_additions(params_env::Dict{String, String})
   return env2
 end
 
-function warn_if_unexpected_params(params::Dict)
+backend_default_addprocs_params(::Val{:Distributed}) = Distributed.default_addprocs_params()
+
+function warn_if_unexpected_params(backend::Symbol, params::Dict)
     params_that_we_support = [:dir, :exename, :exeflags]
-    upstreams_defaults = Distributed.default_addprocs_params()
+    upstreams_defaults = backend_default_addprocs_params(Val(backend))
     for (k, v) in pairs(params)
         if k == :env
             # We special-case `:env`, because our support status depends on the Julia version
@@ -171,32 +173,34 @@ function warn_if_unexpected_params(params::Dict)
     return nothing
 end
 
-function Distributed.launch(manager::SlurmManager, params::Dict, instances_arr::Array, c::Condition)
+backend_worker_arg(::Val{:Distributed}) = `--worker`
+backend_cluster_cookie(::Val{:Distributed}) = Distributed.cluster_cookie()
+backend_worker_config(::Val{:Distributed}) = Distributed.WorkerConfig()
+
+# Shared launch implementation, parameterized on the Distributed-like module
+# (`Distributed` or `DistributedNext`). Both modules expose the same
+# `cluster_cookie` / `WorkerConfig` / `default_addprocs_params` API; they
+# differ only in how workers are started on the remote end, which we handle
+# by picking the appropriate worker command-line argument.
+function _launch_impl(backend::Symbol, manager::SlurmManager, params::Dict, instances_arr::Array, c::Condition)
     try
-        warn_if_unexpected_params(params)
+        warn_if_unexpected_params(backend, params)
 
         exehome = params[:dir]
         exename = params[:exename]
         exeflags = params[:exeflags]
 
-        _srun_cmd_without_env = `srun -D $exehome $exename $exeflags --worker`
+        worker_arg = backend_worker_arg(Val(backend))
+        _srun_cmd_without_env = `srun -D $exehome $exename $exeflags $worker_arg`
 
-        @static if Base.VERSION >= v"1.6.0"
-          # Pass the key-value pairs from `params[:env]` to the `srun` command:
-          env2 = _new_environment_additions(Dict{String,String}(params[:env]))
-          srun_cmd_with_env = addenv(_srun_cmd_without_env, env2)
-        else
-          # See discussion above for why we don't support this functionality on Julia 1.5 and earlier.
-          if haskey(params, :env)
-            @warn "SlurmClusterManager.jl does not support params[:env] on Julia 1.5 and earlier" Base.VERSION
-          end
-          srun_cmd_with_env = _srun_cmd_without_env
-        end
+        # Pass the key-value pairs from `params[:env]` to the `srun` command:
+        env2 = _new_environment_additions(Dict{String,String}(params[:env]))
+        srun_cmd_with_env = addenv(_srun_cmd_without_env, env2)
 
         # Pass cookie as stdin to srun; srun forwards stdin to process
         # This way the cookie won't be visible in ps, top, etc on the compute node
         manager.srun_proc = open(srun_cmd_with_env, write=true, read=true)
-        write(manager.srun_proc, cluster_cookie())
+        write(manager.srun_proc, backend_cluster_cookie(Val(backend)))
         write(manager.srun_proc, "\n")
 
         t = @async for i in 1:manager.ntasks
@@ -208,7 +212,7 @@ function Distributed.launch(manager::SlurmManager, params::Dict, instances_arr::
           m[1] === nothing && error("could not extract port (m[1]) after parsing $line")
           m[2] === nothing && error("could not extract host (m[2]) after parsing $line")
 
-          config = WorkerConfig()
+          config = backend_worker_config(Val(backend))
           config.port = parse(Int, m[1]::AbstractString)
           config.host = strip(m[2]::AbstractString)
 
@@ -246,6 +250,10 @@ function Distributed.launch(manager::SlurmManager, params::Dict, instances_arr::
     end
 end
 
-function Distributed.manage(manager::SlurmManager, id::Integer, config::WorkerConfig, op::Symbol)
+function Distributed.launch(manager::SlurmManager, params::Dict, instances_arr::Array, c::Condition)
+    _launch_impl(:Distributed, manager, params, instances_arr, c)
+end
+
+function Distributed.manage(manager::SlurmManager, id::Integer, config::Distributed.WorkerConfig, op::Symbol)
     # This function needs to exist, but so far we don't do anything
 end
