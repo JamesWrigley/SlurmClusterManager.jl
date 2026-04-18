@@ -6,4 +6,4 @@ set -x
 
 pwd
 
-julia --code-coverage=user script.jl
+julia --startup-file=no --code-coverage=user script.jl
