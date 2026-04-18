@@ -3,11 +3,9 @@ extract_test_result_value(test_result::Test.Pass) = test_result.value
 recursively_unwrap_ex(ex::ErrorException) = ex
 recursively_unwrap_ex(ex::Base.IOError) = ex
 
-@static if Base.VERSION >= v"1.2-"
-  function recursively_unwrap_ex(outer_ex::TaskFailedException)
+function recursively_unwrap_ex(outer_ex::TaskFailedException)
     new_thing = outer_ex.task.exception
     return recursively_unwrap_ex(new_thing)
-  end
 end
 
 Base.@kwdef struct ConfigForTestingTaskFailedException
